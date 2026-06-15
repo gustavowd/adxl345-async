@@ -35,55 +35,6 @@ pub enum DataRate {
 }
 
 // =========================================================================
-// CAMADA DE ABSTRAÇÃO DO BARRAMENTO (A mágica para aceitar I2C ou SPI)
-// =========================================================================
-
-/// Trait interna que define as operações que qualquer barramento (I2C/SPI) deve cumprir
-#[allow(async_fn_in_trait)]
-pub trait AsyncBus {
-    type Error;
-    async fn read_reg(&mut self, reg: u8) -> Result<u8, Self::Error>;
-    async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Self::Error>;
-    async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error>;
-}
-
-/// Implementação da abstração de barramento especificamente para I2C
-pub struct I2cBus<I2C> {
-    i2c: I2C,
-    address: u8,
-}
-
-impl<I2C> I2cBus<I2C> {
-    pub fn new(i2c: I2C, addr: Option<Address>) -> Self {
-        Self { 
-            i2c,
-            address: addr.map(|a| a as u8).unwrap_or(Address::SECONDARY as u8),
-        }
-    }
-}
-
-impl<I2C: I2c> AsyncBus for I2cBus<I2C> {
-    type Error = I2C::Error;
-
-    async fn read_reg(&mut self, reg: u8) -> Result<u8, Self::Error> {
-        let mut buf = [0u8; 1];
-        self.i2c.write_read(self.address, &[reg], &mut buf).await?;
-        Ok(buf[0])
-    }
-
-    async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Self::Error> {
-        self.i2c.write(self.address, &[reg, val]).await?;
-        Ok(())
-    }
-
-    async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.i2c.write_read(self.address, &[reg], buf).await?;
-
-        Ok(())
-    }
-}
-
-// =========================================================================
 // O DRIVER PRINCIPAL (Independente de protocolo)
 // =========================================================================
 
@@ -152,6 +103,56 @@ where
         );
 
         Ok(accel_g)
+    }
+}
+
+
+// =========================================================================
+// CAMADA DE ABSTRAÇÃO DO BARRAMENTO (A mágica para aceitar I2C ou SPI)
+// =========================================================================
+
+/// Trait interna que define as operações que qualquer barramento (I2C/SPI) deve cumprir
+#[allow(async_fn_in_trait)]
+pub trait AsyncBus {
+    type Error;
+    async fn read_reg(&mut self, reg: u8) -> Result<u8, Self::Error>;
+    async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Self::Error>;
+    async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error>;
+}
+
+/// Implementação da abstração de barramento especificamente para I2C
+pub struct I2cBus<I2C> {
+    i2c: I2C,
+    address: u8,
+}
+
+impl<I2C> I2cBus<I2C> {
+    pub fn new(i2c: I2C, addr: Option<Address>) -> Self {
+        Self { 
+            i2c,
+            address: addr.map(|a| a as u8).unwrap_or(Address::SECONDARY as u8),
+        }
+    }
+}
+
+impl<I2C: I2c> AsyncBus for I2cBus<I2C> {
+    type Error = I2C::Error;
+
+    async fn read_reg(&mut self, reg: u8) -> Result<u8, Self::Error> {
+        let mut buf = [0u8; 1];
+        self.i2c.write_read(self.address, &[reg], &mut buf).await?;
+        Ok(buf[0])
+    }
+
+    async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Self::Error> {
+        self.i2c.write(self.address, &[reg, val]).await?;
+        Ok(())
+    }
+
+    async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error> {
+        self.i2c.write_read(self.address, &[reg], buf).await?;
+
+        Ok(())
     }
 }
 
