@@ -1,6 +1,6 @@
 [package]
 name = "adxl345-async"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Gustavo Weber Denardin <gustavo@utfpr.edu.br>"]
 description = "Um driver async para o acelerômetro ADXL345 usando embedded-hal-async"
