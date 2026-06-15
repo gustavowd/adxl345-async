@@ -9,6 +9,7 @@ const REG_BW_RATE: u8 = 0x2C;
 const REG_POWER_CTL: u8 = 0x2D;
 const REG_DATA_FORMAT: u8 = 0x31;
 const REG_DATAX0: u8 = 0x32;
+const EARTH_GRAVITY: f32 = 9.80665;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Address {
@@ -88,6 +89,7 @@ impl<I2C: I2c> AsyncBus for I2cBus<I2C> {
 
 pub struct Adxl345Async<XBUS> {
     bus: XBUS,
+    scale_factor: f32,
 }
 
 impl<XBUS> Adxl345Async<XBUS>
@@ -96,7 +98,7 @@ where
 {
     /// Cria uma nova instância do driver a partir de um Barramento (Bus) assíncrono
     pub fn new(bus: XBUS) -> Self {
-        Self { bus }
+        Self { bus , scale_factor: 0.00390625}
     }
 
     /// Lê o ID do dispositivo (Deve retornar 0xE5)
@@ -112,6 +114,12 @@ where
 
     /// Configura a escala de leitura (G-Range)
     pub async fn set_range(&mut self, range: Range) -> Result<(), XBUS::Error> {
+        match range {
+            Range::G2 => self.scale_factor = 0.00390625,  // 4mg/LSB
+            Range::G4 => self.scale_factor = 0.0078125,   // 8mg/LSB
+            Range::G8 => self.scale_factor = 0.015625,    // 16mg/LSB
+            Range::G16 => self.scale_factor = 0.03125,    // 31.25mg/LSB
+        }
         self.bus.write_reg(REG_DATA_FORMAT, range as u8).await?;
         Ok(())
     }
@@ -123,7 +131,7 @@ where
     }
 
     /// Lê os três eixos (X, Y, Z) de aceleração de forma assíncrona
-    pub async fn read_accel(&mut self) -> Result<(i16, i16, i16), XBUS::Error> {
+    pub async fn get_accel_raw(&mut self) -> Result<(i16, i16, i16), XBUS::Error> {
         // Lendo byte a byte de forma isolada para testar o barramento
         let mut buf = [0u8; 6];
         self.bus.read_multiple(REG_DATAX0, &mut buf).await?;
@@ -133,6 +141,17 @@ where
         let z = i16::from_le_bytes([buf[4], buf[5]]);
 
         Ok((x, y, z))
+    }
+
+    pub async fn get_accel(&mut self) -> Result<(f32, f32, f32), XBUS::Error> {
+        let accel = self.get_accel_raw().await?;
+        let accel_g: (f32, f32, f32) = (
+            (accel.0 as f32) * EARTH_GRAVITY * self.scale_factor,
+            (accel.1 as f32) * EARTH_GRAVITY * self.scale_factor,
+            (accel.2 as f32) * EARTH_GRAVITY * self.scale_factor,
+        );
+
+        Ok(accel_g)
     }
 }
 
