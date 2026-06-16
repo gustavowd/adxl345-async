@@ -5,6 +5,11 @@ use embedded_hal_async::spi::{SpiDevice, Operation};
 
 // Registradores do ADXL345
 const REG_DEVID: u8 = 0x00;
+const REG_OFSX: u8 = 0x1E;
+#[allow(unused)]
+const REG_OFSY: u8 = 0x1F;
+#[allow(unused)]
+const REG_OFSZ: u8 = 0x20;
 const REG_BW_RATE: u8 = 0x2C;
 const REG_POWER_CTL: u8 = 0x2D;
 const REG_DATA_FORMAT: u8 = 0x31;
@@ -81,6 +86,31 @@ where
         Ok(())
     }
 
+    /// Configura os valores de Offset (Calibração) para os eixos X, Y e Z.
+    /// 
+    /// Os valores devem ser informados em escala de 15.6 mg por LSB.
+    /// Exemplo: Se o eixo X está lendo +8 em repouso (modo 2g), o erro é 8. 
+    /// Dividindo por 4, temos 2. O offset compensatório deve ser -2.
+    pub async fn set_offsets(&mut self, x: i8, y: i8, z: i8) -> Result<(), XBUS::Error> {
+        // Colocamos os 3 valores em um array de bytes (cast para u8 mantém o sinal binário do i8)
+        let offsets = [x as u8, y as u8, z as u8];
+        
+        // Enviamos o array inteiro começando no registrador OFSX (0x1E).
+        // O chip vai gravar o 'x' no 0x1E, o 'y' no 0x1F e o 'z' no 0x20 automaticamente!
+        self.bus.write_multiple(REG_OFSX, &offsets).await?;
+        
+        Ok(())
+    }
+    /*
+    pub async fn set_offsets(&mut self, x: i8, y: i8, z: i8) -> Result<(), XBUS::Error> {
+        // Os registradores aceitam um i8 (inteiro de 8 bits com sinal, de -128 a 127)
+        self.bus.write_reg(REG_OFSX, x as u8).await?;
+        self.bus.write_reg(REG_OFSY, y as u8).await?;
+        self.bus.write_reg(REG_OFSZ, z as u8).await?;
+        Ok(())
+    }
+    */
+
     /// Lê os três eixos (X, Y, Z) de aceleração de forma assíncrona
     pub async fn get_accel_raw(&mut self) -> Result<(i16, i16, i16), XBUS::Error> {
         // Lendo byte a byte de forma isolada para testar o barramento
@@ -118,6 +148,7 @@ pub trait AsyncBus {
     async fn read_reg(&mut self, reg: u8) -> Result<u8, Self::Error>;
     async fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Self::Error>;
     async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error>;
+    async fn write_multiple(&mut self, reg: u8, bytes: &[u8]) -> Result<(), Self::Error>;
 }
 
 /// Implementação da abstração de barramento especificamente para I2C
@@ -153,6 +184,22 @@ impl<I2C: I2c> AsyncBus for I2cBus<I2C> {
         self.i2c.write_read(self.address, &[reg], buf).await?;
 
         Ok(())
+    }
+
+    async fn write_multiple(&mut self, reg: u8, bytes: &[u8]) -> Result<(), Self::Error> {
+        // Criamos um buffer temporário para juntar o registrador + os dados.
+        // Como o chip tem poucos registradores, um limite de 16 bytes é mais que suficiente.
+        let mut buf = [0u8; 16];
+        if reg as usize + bytes.len() > buf.len() {
+            // Apenas uma segurança para não estourar o array estático
+            return Ok(()); 
+        }
+
+        buf[0] = reg; // Primeiro byte é o registrador inicial
+        buf[1..1 + bytes.len()].copy_from_slice(bytes); // Os próximos são os dados
+
+        // Envia tudo de uma vez só pelo I2C
+        self.i2c.write(self.address, &buf[0..1 + bytes.len()]).await
     }
 }
 
@@ -205,5 +252,24 @@ impl<SPI: SpiDevice> AsyncBus for SpiBus<SPI> {
         self.spi.transaction(&mut operations).await?;
 
         Ok(())
+    }
+
+    async fn write_multiple(&mut self, reg: u8, bytes: &[u8]) -> Result<(), Self::Error> {
+        // No ADXL345, para escrita múltipla em SPI, o Bit 6 (0x40) deve ser 1.
+        // O Bit 7 (0x80) é 0 para indicar operação de ESCRITA.
+        let cmd = reg | 0x40;
+
+        // Criamos um buffer temporário para juntar o comando + dados
+        let mut buf = [0u8; 16];
+        if bytes.len() + 1 > buf.len() {
+            return Ok(()); // Proteção simples contra estouro de array
+        }
+
+        buf[0] = cmd;
+        buf[1..1 + bytes.len()].copy_from_slice(bytes);
+
+        // No SPI assíncrono, enviamos o bloco inteiro de uma vez.
+        // O driver do SPI gerencia o pino CS (Chip Select) automaticamente aqui.
+        self.spi.write(&buf[0..1 + bytes.len()]).await
     }
 }
