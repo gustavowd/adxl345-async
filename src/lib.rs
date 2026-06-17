@@ -1,7 +1,9 @@
 #![no_std]
 
 use embedded_hal_async::i2c::I2c;
-use embedded_hal_async::spi::{SpiDevice, Operation};
+use embedded_hal_async::i2c::Operation as I2cOperation;
+use embedded_hal_async::spi::SpiDevice;
+use embedded_hal_async::spi::Operation as SpiOperation;
 
 // Registradores do ADXL345
 const REG_DEVID: u8 = 0x00;
@@ -181,25 +183,25 @@ impl<I2C: I2c> AsyncBus for I2cBus<I2C> {
     }
 
     async fn read_multiple(&mut self, reg: u8, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.i2c.write_read(self.address, &[reg], buf).await?;
-
-        Ok(())
+        let cmd = [reg];
+        
+        let mut operations = [
+            I2cOperation::Write(&cmd),
+            I2cOperation::Read(buf),
+        ];
+        
+        self.i2c.transaction(self.address, &mut operations).await
     }
 
     async fn write_multiple(&mut self, reg: u8, bytes: &[u8]) -> Result<(), Self::Error> {
-        // Criamos um buffer temporário para juntar o registrador + os dados.
-        // Como o chip tem poucos registradores, um limite de 16 bytes é mais que suficiente.
-        let mut buf = [0u8; 16];
-        if reg as usize + bytes.len() > buf.len() {
-            // Apenas uma segurança para não estourar o array estático
-            return Ok(()); 
-        }
-
-        buf[0] = reg; // Primeiro byte é o registrador inicial
-        buf[1..1 + bytes.len()].copy_from_slice(bytes); // Os próximos são os dados
-
-        // Envia tudo de uma vez só pelo I2C
-        self.i2c.write(self.address, &buf[0..1 + bytes.len()]).await
+        let cmd = [reg];
+        
+        let mut operations = [
+            I2cOperation::Write(&cmd),
+            I2cOperation::Write(bytes),
+        ];
+        
+        self.i2c.transaction(self.address, &mut operations).await
     }
 }
 
@@ -244,8 +246,8 @@ impl<SPI: SpiDevice> AsyncBus for SpiBus<SPI> {
         
         // Criamos um array de operações: primeiro escreve o comando, depois lê os dados
         let mut operations = [
-            Operation::Write(&cmd),
-            Operation::Read(buf),
+            SpiOperation::Write(&cmd),
+            SpiOperation::Read(buf),
         ];
 
         // Passamos o array de operações direto para o hardware
@@ -255,21 +257,16 @@ impl<SPI: SpiDevice> AsyncBus for SpiBus<SPI> {
     }
 
     async fn write_multiple(&mut self, reg: u8, bytes: &[u8]) -> Result<(), Self::Error> {
-        // No ADXL345, para escrita múltipla em SPI, o Bit 6 (0x40) deve ser 1.
-        // O Bit 7 (0x80) é 0 para indicar operação de ESCRITA.
-        let cmd = reg | 0x40;
+        // Bit 7 em 0 (Escrita) e Bit 6 em 1 (Múltiplos bytes)
+        let cmd = [reg | 0x40]; 
+        
+        // O hardware SPI mantém o pino CS (Chip Select) em nível lógico baixo (ativo) 
+        // durante toda a transação, enviando primeiro o comando e depois os bytes de dados.
+        let mut operations = [
+            SpiOperation::Write(&cmd),
+            SpiOperation::Write(bytes),
+        ];
 
-        // Criamos um buffer temporário para juntar o comando + dados
-        let mut buf = [0u8; 16];
-        if bytes.len() + 1 > buf.len() {
-            return Ok(()); // Proteção simples contra estouro de array
-        }
-
-        buf[0] = cmd;
-        buf[1..1 + bytes.len()].copy_from_slice(bytes);
-
-        // No SPI assíncrono, enviamos o bloco inteiro de uma vez.
-        // O driver do SPI gerencia o pino CS (Chip Select) automaticamente aqui.
-        self.spi.write(&buf[0..1 + bytes.len()]).await
+        self.spi.transaction(&mut operations).await
     }
 }
